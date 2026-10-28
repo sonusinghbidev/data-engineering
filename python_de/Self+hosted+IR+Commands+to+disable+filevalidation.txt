@@ -1,0 +1,16 @@
+Microsoft Documentation:
+
+https://learn.microsoft.com/en-us/azure/data-factory/connector-file-system?tabs=data-factory#sample-linked-service-and-dataset-definitions
+
+Command to change directory :
+
+cd "C:\Program Files\Microsoft Integration Runtime\5.0\Shared\"
+
+Command to disable local file validation: 
+
+ .\dmgcmd.exe -DisableLocalFolderPathValidation
+
+Once you did above , Hold shift + Right click on 'host' folder and copy the path --> Paste the path in ADF Linked service Host
+
+C:\Users\shanmukh\Downloads\Host
+
