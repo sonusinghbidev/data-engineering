@@ -69,9 +69,11 @@ print(s, s2)
 # sort method with reverse parameter sorts the list in descending order
 s.sort(reverse=False)  # sort method modifies the original list in place
 print(s)
+////////////////////////////////////////////////////////////////////////////////////////////////
 
 '''
-
+'''
+////////////////////////////////////////////////////////////////////////////////////////////////
 # string methods
 
 
@@ -82,3 +84,169 @@ name = "Data Engineering"
 # 0 1 2 3 4 5
 #
 print(name[:2:2])  # slicing the string from index 1 to 3 (4 is excluded)
+print(name[-5:3])
+////////////////////////////////////////////////////////////////////////////////////////////////
+'''
+'''
+////////////////////////////////////////////////////////////////////////////////////////////////
+phone = '23169639'
+print(phone.isdigit())
+
+
+alnum = 'SDX67229X'
+print(phone.isalnum())
+
+# Tuple is mutable , hold duplicates, slicing indexing
+
+print("Tuple Topics!!!")
+
+tuple1 = (3, 4, "BD")
+tuple2 = (5)
+tuple3 = (3, )
+
+print(type(tuple1), type(tuple3), type(tuple3))
+
+
+num = (2, 4, 1, 8, 5, 3, 4)
+print(num)
+print(num[2:])
+print(num[:34])
+print(num[34:])
+
+
+# Tuple Methods
+
+print(num.count(4))
+
+# index method
+
+print("Index Method: ", num.index(8))
+
+student = ("Ashu", "Python", 32)
+
+name, course, age = student
+print(name, course, age)
+////////////////////////////////////////////////////////////////////////////////////////////////
+'''
+
+
+# Set
+'''A set is a collection of unique items in Python. Sets do not allow duplicate items and do 
+    not maintain any particular order so it can’t be indexed.'''
+# it is mutable
+# it does not hold duplicate values
+# it is unodered
+# slicing & indexing will not work
+
+a = {1, 2, 4, 6, 7, 4, 6}
+print(a)
+a.add(8)
+print(a)
+a.remove(8)
+print(a)
+
+'''
+remove() raises an error if the element is not found.  
+discard() does not raise an error if the element is missing.
+'''
+emptyset = {}  # it will create a empty dictionary
+print(emptyset)
+print(type(emptyset))
+
+# An empty set cannot be created using {} as it creates an empty dictionary. Use set() instead.
+emptyset_construct = set()
+print(emptyset_construct)
+print(type(emptyset_construct))
+
+
+# Problem Solving
+
+list = [1, 3, 5, 8]
+
+# remove the 1st and alst value frome it and give the sum of it
+
+list.remove(1)
+list.remove(8)
+print(list, sum(list))
+
+print('problem 2')
+
+phone_num = ["+91 9329302102", '+1 3212031022',
+             '+123 9323843276', '9112134533']
+
+output_2 = []
+
+for num in phone_num:
+    digit = num.replace("-", "").replace(" ", "")
+    output_2.append(int(digit[-10:]))
+
+print(output_2)
+
+# Problem 3
+print('Problem 3')
+
+emails = ['abc@google.com', 'syed@gmail.com',
+          'har@dataengineeringdaily.com', 'ashu@yahoo.com', 'bob@gmail.com', 'alice@google.com']
+
+output3 = {}
+
+for email in emails:
+    domain = email.split("@")[1]
+
+emails = ['abc@google.com', 'syed@gmail.com',
+          'har@dataengineeringdaily.com', 'ashu@yahoo.com', 'bob@gmail.com', 'alice@google.com']
+
+output3 = {}
+
+for email in emails:
+    domain = email.split("@")[1]
+    # output3.add(domain)
+
+    if domain in output3:
+        output3[domain] = output3[domain] + 1
+    else:
+        output3[domain] = 1
+
+
+print(output3)
+
+
+# print(emails.substitue("@"))
+
+# Problem 4
+orders = ['order_393993.csv', 'order_773773.csv', 'order_393939.csv']
+output4 = []
+
+for files in orders:
+    file_num = files.split("_")[1].split('.')[0]
+    output4.append(int(file_num))
+print(output4)
+
+
+# Problem 5
+
+input2 = [393993, 773773, 393939]
+
+output5 = []
+
+for order in input2:
+    filename = 'order_' + str(order) + '.csv'
+    output5.append(filename)
+
+print(output5)
+
+
+# problem 6
+
+names = [' hAriom', 'we erf', 'RaHuL']
+
+output6 = []
+
+for name in names:
+    name = name.replace(' ', '')
+    name = name.strip()
+    name = name.capitalize()
+
+    output6.append(name)
+
+print(output6)
