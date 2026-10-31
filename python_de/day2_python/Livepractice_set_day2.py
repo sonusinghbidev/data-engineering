@@ -161,6 +161,9 @@ print(type(emptyset_construct))
 
 # Problem Solving
 
+names = [" "]
+
+
 list = [1, 3, 5, 8]
 
 # remove the 1st and alst value frome it and give the sum of it
@@ -217,9 +220,19 @@ print(output3)
 orders = ['order_393993.csv', 'order_773773.csv', 'order_393939.csv']
 output4 = []
 
-for files in orders:
-    file_num = files.split("_")[1].split('.')[0]
-    output4.append(int(file_num))
+print("problem 3 - method 1..................")
+
+# for files in orders:
+#     file_num = files.split("_")[1].split('.')[0]
+#     output4.append(int(file_num))
+# print(output4)
+
+print("problem 3 - method 2...................")
+
+for order in orders:
+    filesname = order.split(".")[0][-6:]
+    output4.append(filesname)
+    # print(order.split(".")[0][-6:])
 print(output4)
 
 
@@ -228,10 +241,13 @@ print(output4)
 input2 = [393993, 773773, 393939]
 
 output5 = []
+# Method 1
+# output5 = ['order_' + str(order) + '.csv' for order in input2]
 
 for order in input2:
     filename = 'order_' + str(order) + '.csv'
     output5.append(filename)
+
 
 print(output5)
 
@@ -250,3 +266,60 @@ for name in names:
     output6.append(name)
 
 print(output6)
+
+print("--------------------------------------------------------------------------------------")
+
+# List Comprehension
+
+numbers = [1, 2, 3, 4, 5, 6]
+
+
+output_list_co = [numm**2 for numm in numbers]
+# print(output_list_co)
+
+
+# output_even = [num for num in numbers if num % 2 == 0]
+# print(output_even)
+
+# output_evenodd = ["Even" if num % 2 == 0 else "Odd" for num in numbers]
+# print(output_evenodd)
+
+
+print("Matrix...................................................")
+
+matrix = [
+    [1, 2],
+    [3, 4],
+    [5, 6]
+]
+output_mat = [
+    num
+    for row in matrix
+    for num in row
+]
+# print(output_mat)
+
+
+numbers = [1, 2, 3, 4, 5, 6]
+
+# exp_output = {1: 1, 2:4, 3:9, 4:16, 5:25, 6:36}
+output_sq = {}
+
+# for num in numbers:
+#     output_sq[num] = num**2
+
+# print(output_sq)
+
+output_sq = {num: num**2 for num in numbers}
+print(output_sq)
+
+
+dup_numbers = [1, 2, 1, 1, 2, 3, 3, 5]
+output_dup = {}
+
+for num in dup_numbers:
+    if num not in output_dup.keys():
+        output_dup[num] = 1
+    else:
+        output_dup[num] += 1
+print(output_dup)
