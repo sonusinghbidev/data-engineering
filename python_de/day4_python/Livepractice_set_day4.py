@@ -44,13 +44,12 @@ del students["age2"]
 
 # print(students)
 
-students.pop("age")
+students.pop("age")  # it will remove The item matching the specified key
+
 print(students)
 print('----------------------------------------------------------------------------------')
 
-# it will remove the latest added item in the dictionary
-
-students.popitem()
+students.popitem()  # it will remove the latest added item in the dictionary
 # print(stundents)
 print('----------------------------------------------------------------------------------')
 print("Dictionary Method")
