@@ -323,3 +323,10 @@ for num in dup_numbers:
     else:
         output_dup[num] += 1
 print(output_dup)
+
+
+# 1st iteration number=1, output= {1:1}
+# 2nd iteration number=2, output= {1:1, 2: 1}
+# 3rd iteration number=1, output = {1:2, 2:1}
+# 4th iteration number=1, output = {1:3, 2:1}
+# 5th iteration number=2, output= {1:3, 2: 2}
