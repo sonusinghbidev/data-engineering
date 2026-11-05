@@ -14,6 +14,10 @@ The material is organized by day:
 | Day 4 | Dictionaries, nested dictionaries, iteration, and dictionary methods |
 | Day 5 | File handling, CSV, JSON, HTTP methods, APIs, and the `requests` library |
 | Day 6 | Live practice covering loops, zip, enumerate, comprehensions, and dictionaries |
+| Day 7 | Functions, positional and keyword arguments, `*args`, `**kwargs`, lambdas, and copy behavior |
+| Day 8 | `map()`, `filter()`, `reduce()`, shallow and deep copy, and combining functional operations |
+| Day 9 | Problem-solving patterns, recursion, data cleaning, deduplication, and loop control |
+| Day 10 | List and dictionary comprehensions, exception handling, modules, virtual environments, and deployment |
 
 The repository also includes:
 
@@ -53,8 +57,29 @@ python_de/
 |   |-- employees.csv
 |   |-- orders.json
 |   `-- order2.json
-`-- day6_python/
-    `-- Livepractice_set_day6.py
+|-- day6_python/
+|   |-- Livepractice_set_day6.py
+|   |-- Livepractice_set_day6.1.py
+|   |-- day6_notes.md
+|   |-- day6_problems.md
+|   |-- employees.sql
+|   `-- requirements.txt
+|-- day7_python/
+|   |-- Livepractice_set_day7.py
+|   |-- day7_notes.md
+|   `-- day7_problems.md
+|-- day8_python/
+|   |-- Livepractice_set_day8.py
+|   |-- day8_notes.md
+|   `-- day8_problems.md
+|-- day9_python/
+|   |-- Livepractice_set_day9.py
+|   |-- day9_notes.md
+|   `-- day9_problems.md
+`-- day10_python/
+    |-- Livepractice_set_day10.py
+    |-- day10_notes.md
+    `-- day10_problems.md
 ```
 
 ## Prerequisites
