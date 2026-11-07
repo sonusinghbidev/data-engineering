@@ -52,7 +52,7 @@ def hell(n):
     hell(n-1)
 
 
-hell(n)
+# hell(n)
 
 
 users = [
@@ -98,7 +98,7 @@ list1 = [1, 2, 3, 4, 5]
 for num in list1:
     if num > 3:
         break
-    print(num)
+    # print(num)
 
 
 # lsit_1 =  [1, 2, 1, 3, 4, 2]
@@ -128,4 +128,4 @@ output = {}
 
 for customer in customers:
     output[customer['id']] = customer
-print(list(output.values()))
+print((output.values()))
