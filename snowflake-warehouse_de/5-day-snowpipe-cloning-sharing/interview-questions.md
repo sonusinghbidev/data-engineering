@@ -1,35 +1,48 @@
-# Day 5 — Interview Questions: Snowpipe, ADLS Auto-Ingest, Cloning & Sharing
+# Day 3 — Interview Questions: Streams and Tasks
 
-> 15 questions covering all three concepts. Difficulty tags: (Warm-up) → (Conceptual) → (Scenario) → (Tricky) → (System design)
+> 18 questions across both concepts. Attempt your own answer first, then check the solutions file.
+> Difficulty tags: (Warm-up) → (Conceptual) → (Scenario) → (Tricky) → (Deep dive) → (System design)
 
 ---
 
-**Q1 (Warm-up)** — What is Snowpipe and how does it differ from a Task that runs `COPY INTO` on a 1-minute schedule?
+## Concept 1: Streams — Change Data Capture
 
-**Q2 (Warm-up)** — What does `AUTO_INGEST = TRUE` on a Pipe object mean? What infrastructure component enables it on Azure?
+**Q1 (Warm-up)** — What is a Snowflake Stream? What problem does it solve compared to doing a full table reload every pipeline run?
 
-**Q3 (Conceptual)** — Snowpipe is described as "serverless." What exactly does that mean in this context — what compute does it use and how is it billed?
+**Q2 (Warm-up)** — What are the three metadata columns every Stream adds to its rows? What are the possible values for `METADATA$ACTION`?
 
-**Q4 (Conceptual)** — A file is uploaded to the stage twice — once at 10:00 AM and again at 10:05 AM with the same filename but different content. Does Snowpipe load it twice? Why or why not?
+**Q3 (Conceptual)** — How does a Snowflake Stream represent an UPDATE? How many rows appear in the stream for a single UPDATE, and what are their `METADATA$ACTION` and `METADATA$ISUPDATE` values?
 
-**Q5 (Tricky)** — You set up auto-ingest with Azure Event Grid. Files land in ADLS but `SYSTEM$PIPE_STATUS` shows `executionState = STALE`. What does STALE mean and what do you do?
+**Q4 (Conceptual)** — What is the difference between a standard stream and an `APPEND ONLY` stream? Give a real-world example of when you would use each.
 
-**Q6 (Scenario)** — Your Snowpipe loaded 10,000 files successfully over the past month. This morning, 50 files arrived but were not loaded — the pipe shows `PAUSED`. What are the two most likely causes and how do you recover?
+**Q5 (Tricky)** — You query a stream with `SELECT *` and see 200 change records. Does the stream offset advance? What action actually clears the stream?
 
-**Q7 (Scenario)** — You need to load JSON files (not CSV) from an ADLS container into a VARIANT column using Snowpipe. Walk through the key differences in your Pipe definition compared to loading CSV.
+**Q6 (Scenario)** — You have a `CUSTOMERS_RAW` table that receives inserts and updates throughout the day. Write the MERGE statement that uses a stream on this table to keep `STG_CUSTOMERS` in sync — handling both new inserts and updates.
 
-**Q8 (Tricky)** — What is the difference between the `STORAGE INTEGRATION` and the `NOTIFICATION INTEGRATION` required for ADLS auto-ingest? Why are two separate integrations needed?
+**Q7 (Tricky)** — A stream on a table shows an UPDATE as two rows — a DELETE and an INSERT. In your MERGE, you filter to `METADATA$ACTION = 'INSERT'` only. Does this correctly handle updates? Why or why not?
 
-**Q9 (Warm-up)** — What is zero-copy cloning? What does "zero-copy" mean technically — is there no data at all when you first clone?
+**Q8 (Deep dive)** — What does it mean for a stream to become "stale"? What causes it, and what do you have to do to recover?
 
-**Q10 (Conceptual)** — You clone a 10 TB production database to create a dev environment. A developer then runs `DELETE FROM orders WHERE order_date < '2023-01-01'` in the clone. How much additional storage is consumed, and where does it come from?
+**Q9 (Scenario)** — You have an `ORDERS_RAW` table where rows are only ever inserted — never updated or deleted. What type of stream should you create and why?
 
-**Q11 (Tricky)** — Can you clone a table that has an active Stream on it? What happens to the stream in the clone?
+---
 
-**Q12 (Scenario)** — A developer accidentally deleted 2 million rows from the STAGING table at 3 AM. You need to recover the data. The table has a 1-day Time Travel window. Write the exact SQL to restore the rows using cloning.
+## Concept 2: Tasks — Scheduling and Automation
 
-**Q13 (Conceptual)** — What is Snowflake Data Sharing? How does the consumer access shared data — do they need to copy it into their account first?
+**Q10 (Warm-up)** — What is a Snowflake Task? What two scheduling approaches does it support?
 
-**Q14 (Tricky)** — You share a table directly with a partner. The table contains customer PII (email, phone). The partner complains they can see the PII. What is the correct Snowflake pattern to share aggregated data while hiding raw PII? Write the SQL.
+**Q11 (Warm-up)** — Tasks are created in SUSPENDED state by default. What command do you run to activate a task? What command pauses it without dropping it?
 
-**Q15 (System design)** — Design a real-time order analytics system: orders arrive as JSON files in an ADLS container every few seconds from multiple microservices. The BI team in a partner company needs to query a live daily summary. No data should be shared raw. Walk through the full architecture — storage, ingestion, pipeline, and sharing.
+**Q12 (Conceptual)** — What does `WHEN SYSTEM$STREAM_HAS_DATA('schema.stream_name')` do in a Task definition? Why does this matter for cost?
+
+**Q13 (Scenario)** — Write a Task that checks for new customer changes every 5 minutes and runs a MERGE to sync a staging table. Include the WHEN condition so the warehouse only starts when there is actual data.
+
+**Q14 (Tricky)** — What is `EXECUTE TASK`? How is it different from waiting for the scheduled run? Give two situations where you would use it in production.
+
+**Q15 (Conceptual)** — Explain Task chaining. What is the difference between a root task and a child task? Can a child task have its own schedule?
+
+**Q16 (Scenario)** — You have three tasks: `LOAD_TASK` → `TRANSFORM_TASK` → `MART_TASK`. In what order do you resume them and why?
+
+**Q17 (Deep dive)** — Your Task fails because the warehouse was auto-suspended. The stream has been accumulating changes for 18 hours. Walk through the steps you take to recover without losing data.
+
+**Q18 (System design)** — Design a fully Snowflake-native CDC pipeline for a retail company. The `SALES_RAW` table receives new and updated rows throughout the day. You need to: keep `STG_SALES` in sync using a stream and MERGE, then refresh `SALES_MART` after each sync. Use chained tasks with a schedule and WHEN condition. Describe the full setup.
