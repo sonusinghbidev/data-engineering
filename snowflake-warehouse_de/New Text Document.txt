@@ -1,0 +1,6 @@
+Snowflake Details
+
+
+Account name: EASTUS2_ACCOUNT
+username: SNOWFLAKE_ADMIN
+Sonusingh@9136547716
