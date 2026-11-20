@@ -1,397 +1,263 @@
-# Day 3 — Interview Solutions: Streams and Tasks
+# Day 5 — Interview Solutions: Stages, COPY INTO, Snowpipe, and Zero-Copy Cloning
 
-> Complete answers to all 18 questions. Read these after attempting the questions yourself.
-
----
-
-## Concept 1: Streams — Change Data Capture
-
-**Q1 — What is a Snowflake Stream? What problem does it solve?**
-
-A **Stream** is a Snowflake object that sits on top of a table and records every DML change (INSERT, UPDATE, DELETE) made to that table since the stream was last consumed.
-
-**Problem it solves:** Without CDC, keeping a downstream table in sync requires either:
-- **Full reload** — truncate and reload the entire target table every run. Gets expensive as the table grows.
-- **Timestamp delta** — query rows where `updated_at > last_run_time`. Fragile — requires a reliable `updated_at` column on every table.
-
-A Stream removes both problems. Snowflake automatically tracks what changed, and your pipeline only processes the delta — no timestamp column needed, no full scan.
+> Complete answers. Read after attempting on your own.
+> All scenarios reference the Day 4 tables: ORDERS_RAW, STG_ORDERS, ORDERS_MART.
 
 ---
 
-**Q2 — Three stream metadata columns? Possible values for `METADATA$ACTION`?**
+**Q1 — What is a Stage? Why do files need to go through one?**
 
-| Column | Possible values | Meaning |
+A **Stage** is a Snowflake object that points to a file storage location. It acts as a landing zone — `COPY INTO` and Snowpipe can only read files from a stage, not from arbitrary file paths or your laptop.
+
+Why files must go through a stage:
+- Snowflake needs a **controlled access point** with defined file format settings (delimiter, header row, null handling).
+- The stage enables **deduplication** — Snowflake records which files it has already loaded from each stage.
+- It **decouples** the file source (internal storage, S3, ADLS) from the loading SQL — the COPY INTO statement stays the same regardless of where files come from.
+
+---
+
+**Q2 — Internal stage vs external stage. Which needs credentials?**
+
+| | Internal Stage | External Stage |
 |---|---|---|
-| `METADATA$ACTION` | `'INSERT'` or `'DELETE'` | Type of change |
-| `METADATA$ISUPDATE` | `TRUE` or `FALSE` | Was this row part of an UPDATE? |
-| `METADATA$ROW_ID` | unique string | Identifies the specific row that changed |
+| Storage | Snowflake-managed | Your own S3 / Azure ADLS / GCS |
+| Credentials | None — Snowflake owns the storage | Requires Storage Integration or access keys |
+| File upload | `PUT` command or Snowsight UI | Drop files directly in your cloud bucket |
+| Data ownership | Snowflake | You |
+| Best for | Testing, demos, pipelines without existing cloud storage | Production when files already land in your cloud |
 
-`METADATA$ACTION` only ever has two values — `INSERT` and `DELETE`. There is no `UPDATE` value. See Q3 for how updates are represented.
+**External stage** requires credentials because Snowflake needs permission to read from your cloud bucket.
 
 ---
 
-**Q3 — How does a stream represent an UPDATE? How many rows?**
+**Q3 — Three internal stage sub-types. Which for production?**
 
-A single UPDATE produces **two rows** in the stream:
-
-| Row | `METADATA$ACTION` | `METADATA$ISUPDATE` | Content |
+| Sub-type | Reference | Shared? | Tied to one table? |
 |---|---|---|---|
-| Row 1 | `DELETE` | `TRUE` | Old values (before the update) |
-| Row 2 | `INSERT` | `TRUE` | New values (after the update) |
+| User stage | `@~` | No — private to current user | No |
+| Table stage | `@%ORDERS_RAW` | No — only feeds that one table | Yes |
+| Named stage | `@ECOMM_DB.RAW_DATA.ORDERS_RAW_STAGE` | Yes | No |
 
-This is the **pre/post image** pattern. Snowflake stores the before and after state of the changed row.
-
-```sql
--- Get only the new values of updated rows
-SELECT * FROM my_stream
-WHERE METADATA$ACTION = 'INSERT' AND METADATA$ISUPDATE = TRUE;
-
--- Get the old values (useful for auditing what changed)
-SELECT * FROM my_stream
-WHERE METADATA$ACTION = 'DELETE' AND METADATA$ISUPDATE = TRUE;
-```
+**Use named stage in production.** Because:
+- Multiple users and jobs can reference the same stage.
+- File format is defined once on the stage, not repeated in every COPY INTO.
+- Access is controlled by Snowflake RBAC — you can `GRANT USAGE ON STAGE` to specific roles.
+- A table stage can only feed `ORDERS_RAW` — if you later need to load a different table from the same files, you are stuck.
 
 ---
 
-**Q4 — Standard stream vs APPEND ONLY stream. Real-world example for each.**
+**Q4 — What does COPY INTO do? Compute and billing?**
 
-| Type | Tracks | Use when |
+`COPY INTO` reads files from a stage and bulk-inserts them into a Snowflake table. It is a **manual, batch command**.
+
+```sql
+COPY INTO ECOMM_DB.RAW_DATA.ORDERS_RAW
+    (order_id, customer_id, customer_name, product, quantity,
+     unit_price, total_amount, status, order_date)
+FROM @ECOMM_DB.RAW_DATA.ORDERS_RAW_STAGE
+FILE_FORMAT = (TYPE = 'CSV' SKIP_HEADER = 1);
+```
+
+It runs on your **virtual warehouse** (XSMALL / SMALL / MEDIUM etc.) — you are billed warehouse credits for the duration of the COPY INTO run. The warehouse must be running when you execute it.
+
+---
+
+**Q5 — Stage has 2 already-loaded files and 1 new file. What happens to each?**
+
+- **2 previously loaded files** → status `LOAD_SKIPPED`. COPY INTO has a 64-day deduplication window — it records each file's name, size, and last-modified timestamp after loading. On the next run it checks this metadata and skips any file already in the window.
+- **1 new file** → status `LOADED`. It is not in the metadata, so it loads normally.
+
+No duplicates in ORDERS_RAW. The Day 4 stream only captures the rows from the new file — the skipped files generate no stream records.
+
+---
+
+**Q6 — `FORCE = TRUE` on COPIES INTO ORDERS_RAW. Risk + impact on the Day 4 stream.**
+
+`FORCE = TRUE` bypasses the deduplication metadata and loads the file regardless of whether it was previously loaded.
+
+**Risk:** Every row in that file is inserted **again** into ORDERS_RAW — exact duplicate rows with the same `order_id`. Since `ORDERS_RAW` has a `PRIMARY KEY` on `order_id`, Snowflake will raise a constraint violation error (or silently allow duplicates if the PK is not enforced at DML level — Snowflake PKs are not enforced by default). You end up with duplicate order rows.
+
+**Impact on the Day 4 stream:** The stream captures every INSERT including duplicates. The next time `RAW_TO_STG_TASK` fires, the MERGE into `STG_ORDERS` runs — but because MERGE matches on `order_id`, the duplicate INSERTs land in the `WHEN MATCHED` branch and simply overwrite the same row in staging with identical data. The mart numbers stay correct, but the stream was polluted with unnecessary work.
+
+**When FORCE = TRUE is acceptable:** Only in testing — when you need to reload a file to re-test your pipeline. Never in production.
+
+---
+
+**Q7 — COPY INTO skipping `updated_at` and using DEFAULT.**
+
+Name the target columns explicitly. Any column not listed uses its DEFAULT value:
+
+```sql
+COPY INTO ECOMM_DB.RAW_DATA.ORDERS_RAW
+    (order_id, customer_id, customer_name, product, quantity,
+     unit_price, total_amount, status, order_date)
+    -- updated_at is NOT listed → Snowflake uses DEFAULT CURRENT_TIMESTAMP()
+FROM @ECOMM_DB.RAW_DATA.ORDERS_RAW_STAGE
+FILE_FORMAT = (TYPE = 'CSV' SKIP_HEADER = 1);
+```
+
+The CSV has 9 columns, the COPY INTO lists 9 columns, `updated_at` gets its default. This is cleaner than including `updated_at` in the CSV and trying to override it.
+
+---
+
+**Q8 — What is Snowpipe? How is it different from a 1-minute Task + COPY INTO?**
+
+Snowpipe is Snowflake's **automatic, continuous file ingestion** service. You create a Pipe object with a COPY INTO statement. Snowpipe runs it automatically whenever new files arrive — no scheduler, no virtual warehouse to manage.
+
+| | Task + COPY INTO | Snowpipe |
 |---|---|---|
-| Standard | INSERT, UPDATE, DELETE | Rows in the source table can be modified after insertion |
-| Append-only | INSERT only (more efficient) | Rows are written once and never changed |
+| Trigger | Fixed schedule (min 1 min) | File arrival or REST API call |
+| Compute | Your virtual warehouse | Snowflake-managed (serverless) |
+| Latency | Up to 1 min + warehouse startup | Seconds to ~1 minute |
+| Idle cost | Warehouse may bill while idle | Zero — no files = no compute |
+| Duplicate prevention | None built-in | Built-in (file metadata tracking) |
+| Cost model | Warehouse credits | Per-second of serverless compute |
 
-**Standard stream — real-world example:**
-A `CUSTOMERS` table where customer records are updated when they change their email, city, or subscription status. You need the stream to capture both new customers and updates to existing ones.
-
-**Append-only stream — real-world example:**
-An `ORDER_EVENTS` table where each row is a single event (order placed, payment received, shipped). Events are never updated — only new events are appended. An append-only stream is more efficient here because Snowflake does not track update/delete offsets.
-
----
-
-**Q5 — You SELECT from a stream. Does the offset advance?**
-
-**No. A plain `SELECT` does not advance the offset.**
-
-The offset only advances when the stream is consumed inside a **DML transaction** that commits successfully:
-- `INSERT INTO ... SELECT FROM stream`
-- `MERGE INTO ... USING stream`
-
-You can query the stream as many times as you want to inspect changes — they remain visible until used in a DML. If the DML fails and rolls back, the stream offset rolls back too.
+A Task polls every minute even when nothing changed. Snowpipe only runs when triggered and uses compute you never provision.
 
 ---
 
-**Q6 — Write a MERGE that uses a stream to keep STG_CUSTOMERS in sync.**
+**Q9 — Snowpipe is "serverless." When would Task + COPY INTO be better?**
+
+Snowflake maintains a shared pool of pre-warmed compute nodes. Snowpipe uses nodes from this pool — no warehouse to choose or start. You pay per second of actual compute used. Zero files = zero cost.
+
+**When Task + COPY INTO beats Snowpipe:**
+- **Very high throughput** — loading millions of rows per second. You can explicitly scale a virtual warehouse (LARGE, X-LARGE) to maximize parallel loading. Snowpipe's managed pool cannot be sized.
+- **Transformation complexity** — if the COPY INTO needs joins or complex SELECT logic that benefits from large warehouse memory.
+- **You already control the schedule** — if files always arrive at exactly 2 AM and your warehouse is already running for other jobs, a Task adds zero extra cost.
+
+For typical file-by-file streaming (files every few seconds to minutes), Snowpipe is cheaper and simpler.
+
+---
+
+**Q10 — REFRESH called twice. Does Snowpipe load the files twice?**
+
+**No.** Snowpipe maintains its own file metadata table (separate from COPY INTO's tracking). After loading a file, it records the file's name, size, and last-modified timestamp. When `REFRESH` is triggered again, Snowpipe scans the stage but skips any file already in its metadata.
+
+This is the same deduplication mechanism as COPY INTO — it is built into Snowpipe at the pipe level. Each pipe tracks independently, which is why a file can be loaded by COPY INTO into `ORDERS_RAW` and also independently loaded by Snowpipe into `ORDERS_RAW_PIPE_LOAD` without conflict (they maintain separate metadata).
+
+---
+
+**Q11 — Pipe was PAUSED for 2 hours, 15 files arrived. How to make sure all load?**
 
 ```sql
-MERGE INTO STAGING.STG_CUSTOMERS AS target
-USING (
-  SELECT * FROM RAW_DATA.CUSTOMERS_STREAM
-  WHERE METADATA$ACTION = 'INSERT'
-) AS src
-ON target.customer_id = src.customer_id
-WHEN MATCHED THEN
-  UPDATE SET
-    target.full_name  = src.full_name,
-    target.email      = src.email,
-    target.city       = src.city,
-    target.updated_at = CURRENT_TIMESTAMP()
-WHEN NOT MATCHED THEN
-  INSERT (customer_id, full_name, email, city, updated_at)
-  VALUES (src.customer_id, src.full_name, src.email, src.city, CURRENT_TIMESTAMP());
+-- Step 1: Resume the pipe
+ALTER PIPE ECOMM_DB.RAW_DATA.ORDERS_RAW_PIPE SET PIPE_EXECUTION_PAUSED = FALSE;
+
+-- Step 2: Force a scan of the stage to pick up all files that arrived while paused
+ALTER PIPE ECOMM_DB.RAW_DATA.ORDERS_RAW_PIPE REFRESH;
+-- Returns: filesScanned (shows all files in stage), filesQueued (shows new ones)
+
+-- Step 3: Wait ~30 seconds for the serverless compute to process all 15 files
+
+-- Step 4: Verify
+SELECT COUNT(*) FROM ECOMM_DB.RAW_DATA.ORDERS_RAW;
+
+SELECT file_name, row_count, status
+FROM TABLE(INFORMATION_SCHEMA.COPY_HISTORY(
+    TABLE_NAME  => 'ORDERS_RAW',
+    START_TIME  => DATEADD('hours', -3, CURRENT_TIMESTAMP())
+))
+ORDER BY LAST_LOAD_TIME DESC;
+-- All 15 files should show status = LOADED
 ```
 
-Filtering to `METADATA$ACTION = 'INSERT'` captures both genuinely new rows (`METADATA$ISUPDATE = FALSE`) and the new-value row of updates (`METADATA$ISUPDATE = TRUE`). Both should be applied to the target. The `DELETE` rows (old values of updates) are ignored — we only want the latest state.
+**Why no data loss:** Files stay in the stage while the pipe is paused — they are not deleted. `REFRESH` re-scans the stage and queues anything not yet in the pipe's metadata.
 
 ---
 
-**Q7 — Filtering to `METADATA$ACTION = 'INSERT'` in the MERGE — does it correctly handle updates?**
+**Q12 — What is zero-copy cloning? When does storage get consumed?**
 
-**Yes, it correctly handles updates.**
+Zero-copy cloning creates a new Snowflake object that **shares the same underlying micro-partitions** as the source. No bytes are physically copied at clone time. Snowflake just creates a new metadata pointer to the same blocks.
 
-When a row is updated in the source table, the stream produces two rows:
-- `DELETE` with `METADATA$ISUPDATE = TRUE` — old values
-- `INSERT` with `METADATA$ISUPDATE = TRUE` — new values
+**"Zero-copy"** = zero bytes duplicated at clone time. Storage cost at the moment of cloning: zero.
 
-By filtering to `METADATA$ACTION = 'INSERT'`, you get the new-value row. The MERGE then finds the existing row in the target (`WHEN MATCHED`) and overwrites it with the new values. This is exactly the correct behavior for SCD Type 1 (keep only the latest state).
+**Copy-on-Write semantics:** Storage is consumed only when either the source OR the clone is **modified**. Snowflake rewrites only the micro-partitions that contain changed rows — the rest remain shared.
 
-The `DELETE` row is intentionally ignored — it only carries the old values, which you no longer need.
-
----
-
-**Q8 — What does it mean for a stream to become "stale"? How to recover?**
-
-A stream becomes **stale** when the changes it was tracking have aged out of the source table's Time Travel history.
-
-Streams internally rely on Time Travel to store the before-image of changed rows. If the stream is not consumed within the source table's data retention period (default: 1 day on Standard edition), Snowflake can no longer reconstruct those change records.
-
-```sql
-SHOW STREAMS IN SCHEMA RAW_DATA;
--- If the "stale" column is TRUE, the stream is no longer usable
 ```
+After CREATE TABLE ORDERS_RAW_BACKUP CLONE ORDERS_RAW:
+  ORDERS_RAW        ──► [Block A] [Block B] [Block C]   ← same blocks
+  ORDERS_RAW_BACKUP ──► [Block A] [Block B] [Block C]   ← zero extra storage
 
-**Recovery — you cannot un-stale a stream:**
-1. Drop the stale stream
-2. Recreate it — the new stream starts tracking from now
-3. Perform a full reload of the target table (since incremental changes were lost)
-
-**Prevention:** Ensure your Tasks run frequently enough to consume the stream before data ages out. If your table has 1-day retention, the Task must run at least once per day.
-
----
-
-**Q9 — ORDERS_RAW where rows are only ever inserted. What stream type?**
-
-**Append-only stream.**
-
-```sql
-CREATE STREAM IF NOT EXISTS RAW_DATA.ORDERS_STREAM
-  ON TABLE RAW_DATA.ORDERS_RAW
-  APPEND ONLY = TRUE;
-```
-
-Since rows are only ever inserted (never updated or deleted), a standard stream would track offsets for UPDATE and DELETE operations that never happen — wasted overhead. Append-only streams are more efficient for insert-only tables because Snowflake skips that tracking entirely.
-
----
-
-## Concept 2: Tasks — Scheduling and Automation
-
-**Q10 — What is a Snowflake Task? Two scheduling approaches?**
-
-A **Task** is a Snowflake object that runs a single SQL statement on a schedule. It is Snowflake's native job scheduler — no Airflow or cron jobs needed for Snowflake-internal pipelines.
-
-**Two scheduling approaches:**
-
-1. **Interval-based:**
-```sql
-SCHEDULE = '5 MINUTE'    -- every 5 minutes
-SCHEDULE = '60 MINUTE'   -- every hour
-```
-
-2. **CRON-based:**
-```sql
-SCHEDULE = 'USING CRON 0 2 * * * UTC'    -- 2 AM every day
-SCHEDULE = 'USING CRON */15 * * * * UTC' -- every 15 minutes
-SCHEDULE = 'USING CRON 0 9 * * 1 UTC'   -- 9 AM every Monday
+After deleting from ORDERS_RAW_BACKUP:
+  ORDERS_RAW        ──► [Block A] [Block B] [Block C]   ← untouched
+  ORDERS_RAW_BACKUP ──► [Block A*] [Block B] [Block C]  ← Block A* is new
 ```
 
 ---
 
-**Q11 — Command to activate a task? Command to pause it?**
+**Q13 — Developer truncates ORDERS_RAW in ECOMM_DB_DEV clone. What happens to the original?**
 
-```sql
--- Activate (start running on schedule)
-ALTER TASK STAGING.PROCESS_CHANGES_TASK RESUME;
+**Nothing.** The original `ECOMM_DB.RAW_DATA.ORDERS_RAW` is completely unaffected.
 
--- Pause without dropping
-ALTER TASK STAGING.PROCESS_CHANGES_TASK SUSPEND;
+After `CREATE DATABASE ECOMM_DB_DEV CLONE ECOMM_DB`, both databases share the same micro-partitions. When the developer runs `TRUNCATE TABLE ECOMM_DB_DEV.RAW_DATA.ORDERS_RAW`, Snowflake marks all partitions as deleted in `ECOMM_DB_DEV`'s metadata only. The original `ECOMM_DB`'s metadata still points to all the original blocks — they are not touched.
 
--- Check current state
-SHOW TASKS IN SCHEMA STAGING;
--- "state" column: "started" = active on schedule, "suspended" = paused
-```
-
-Tasks are created in SUSPENDED state by default to prevent accidental execution before the pipeline is fully configured and tested.
+This isolation is the whole point of dev/test cloning: developers can destroy and reload data in the dev clone without any risk to production.
 
 ---
 
-**Q12 — What does `WHEN SYSTEM$STREAM_HAS_DATA(...)` do? Why does it matter for cost?**
+**Q14 — Clone ORDERS_RAW. What happens to the stream and tasks?**
 
-`SYSTEM$STREAM_HAS_DATA('schema.stream_name')` returns `TRUE` if the stream has unconsumed changes, `FALSE` if it is empty.
+**Stream (`ORDERS_RAW_STREAM`):** Not cloned. Streams are excluded from cloning. The original stream continues tracking changes to `ECOMM_DB.RAW_DATA.ORDERS_RAW` exactly as before. The cloned table has no stream.
 
-When used in a Task's `WHEN` clause, the task only executes its SQL if the condition is `TRUE`. If `FALSE`, the task skips — **no warehouse starts, no credits consumed**.
+**Tasks (`RAW_TO_STG_TASK`, `STG_TO_MART_TASK`):** Also not cloned. Tasks are excluded from table and schema clones. When cloning a full database (`CLONE ECOMM_DB`), tasks ARE included in the clone but are created in a **SUSPENDED** state — Snowflake does not auto-start them to avoid two task DAGs running against the same underlying data.
 
+If you need a stream on the cloned table:
 ```sql
-CREATE TASK process_task
-  WAREHOUSE = COMPUTE_WH
-  SCHEDULE  = '1 MINUTE'
-  WHEN SYSTEM$STREAM_HAS_DATA('RAW_DATA.CUSTOMERS_STREAM')
-AS
-MERGE INTO STAGING.STG_CUSTOMERS ...;
-```
-
-**Why it matters for cost:** A task running every minute would wake up and spin the warehouse 60 times per hour whether or not any data arrived. With `WHEN SYSTEM$STREAM_HAS_DATA(...)`, if no changes exist, the task skips every single time — zero warehouse cost for those skips. For a pipeline where data arrives once per hour, this avoids 59 unnecessary warehouse starts per hour.
-
----
-
-**Q13 — Write a Task that checks every 5 minutes and runs a MERGE, with WHEN condition.**
-
-```sql
-CREATE TASK IF NOT EXISTS STAGING.PROCESS_CUSTOMER_CHANGES_TASK
-  WAREHOUSE = COMPUTE_WH
-  SCHEDULE  = '5 MINUTE'
-  WHEN SYSTEM$STREAM_HAS_DATA('RAW_DATA.CUSTOMERS_STREAM')
-AS
-MERGE INTO STAGING.STG_CUSTOMERS AS target
-USING (
-  SELECT * FROM RAW_DATA.CUSTOMERS_STREAM
-  WHERE METADATA$ACTION = 'INSERT'
-) AS src
-ON target.customer_id = src.customer_id
-WHEN MATCHED THEN
-  UPDATE SET
-    target.full_name  = src.full_name,
-    target.email      = src.email,
-    target.updated_at = CURRENT_TIMESTAMP()
-WHEN NOT MATCHED THEN
-  INSERT (customer_id, full_name, email, updated_at)
-  VALUES (src.customer_id, src.full_name, src.email, CURRENT_TIMESTAMP());
-
--- Always resume after creating
-ALTER TASK STAGING.PROCESS_CUSTOMER_CHANGES_TASK RESUME;
+CREATE STREAM ECOMM_DB.RAW_DATA.ORDERS_RAW_BACKUP_STREAM
+    ON TABLE ECOMM_DB.RAW_DATA.ORDERS_RAW_BACKUP;
 ```
 
 ---
 
-**Q14 — What is `EXECUTE TASK`? Two situations to use it in production.**
+**Q15 — Recover rows deleted by a bad ETL job. Keep stream and tasks intact.**
 
 ```sql
-EXECUTE TASK STAGING.PROCESS_CUSTOMER_CHANGES_TASK;
-```
+-- Step 1: Identify the bad DELETE query
+SELECT query_id, query_text, start_time
+FROM TABLE(INFORMATION_SCHEMA.QUERY_HISTORY(
+    DATE_RANGE_START => DATEADD('hours', -12, CURRENT_TIMESTAMP())
+))
+WHERE query_text ILIKE '%DELETE%ORDERS_RAW%'
+ORDER BY start_time DESC
+LIMIT 1;
+-- Copy the query_id, e.g. '01ab2c34-...'
 
-`EXECUTE TASK` triggers a task immediately without waiting for the next scheduled run. It respects the same `WHEN` condition as the scheduled run — if the stream is empty, it still skips.
+-- Step 2: Clone ORDERS_RAW as it was BEFORE the bad delete
+-- This does not affect the stream, tasks, or any other object
+CREATE TABLE ECOMM_DB.RAW_DATA.ORDERS_RAW_RECOVERED
+    CLONE ECOMM_DB.RAW_DATA.ORDERS_RAW
+    BEFORE (STATEMENT => '01ab2c34-...');
 
-**Two production situations:**
+-- Step 3: Verify the recovered table has the deleted rows
+SELECT COUNT(*) FROM ECOMM_DB.RAW_DATA.ORDERS_RAW_RECOVERED;
+-- Should be 6 rows higher than current ORDERS_RAW
 
-1. **Testing after creation** — After creating a new task, verify it works immediately instead of waiting up to N minutes for the first scheduled fire.
-
-2. **Manual recovery after failure** — If a task failed (warehouse down, SQL error), fix the issue and use `EXECUTE TASK` to reprocess the backlog right away rather than waiting for the next scheduled run.
-
----
-
-**Q15 — Explain Task chaining. Root task vs child task. Can a child have its own schedule?**
-
-Task chaining builds a **DAG (directed acyclic graph)** using the `AFTER` keyword:
-
-```sql
--- Root: has a schedule
-CREATE TASK root_task WAREHOUSE=WH SCHEDULE='USING CRON 0 2 * * * UTC' AS <sql>;
-
--- Child: fires when root completes successfully
-CREATE TASK child_task WAREHOUSE=WH AFTER root_task AS <sql>;
-```
-
-| | Root task | Child task |
-|---|---|---|
-| Schedule | Yes — has `SCHEDULE` | No — has `AFTER <parent>` |
-| What triggers it | The clock (CRON or interval) | Parent task completing successfully |
-| Can it have its own schedule? | Yes | **No** — a task cannot have both `SCHEDULE` and `AFTER` |
-
-If the root task fails, child tasks do not run. If a child fails, its downstream children also do not run.
-
----
-
-**Q16 — Three tasks: LOAD_TASK → TRANSFORM_TASK → MART_TASK. Resume order?**
-
-```sql
-ALTER TASK MART_TASK RESUME;       -- grandchild first
-ALTER TASK TRANSFORM_TASK RESUME;  -- child second
-ALTER TASK LOAD_TASK RESUME;       -- root last
-```
-
-**Why children first:** When you resume the root task, Snowflake validates the entire DAG. If any child task is still suspended, the root resume fails. Resuming children first ensures the whole chain is ready before the root is activated and the schedule starts firing.
-
----
-
-**Q17 — Task failed, warehouse auto-suspended, stream has 18 hours of changes. How to recover?**
-
-**Step 1: Check if the stream is still valid (not stale)**
-```sql
-SHOW STREAMS IN SCHEMA RAW_DATA;
--- If "stale" = TRUE: stream is lost, need a full reload of the target table
--- If "stale" = FALSE: changes are still there, proceed
-```
-
-**Step 2: Check how many changes are pending**
-```sql
-SELECT COUNT(*) FROM RAW_DATA.CUSTOMERS_STREAM;
-```
-
-**Step 3: Resume the warehouse and manually trigger the task**
-```sql
-ALTER WAREHOUSE COMPUTE_WH RESUME;
-EXECUTE TASK STAGING.PROCESS_CUSTOMER_CHANGES_TASK;
-```
-
-**Step 4: Verify the task succeeded and stream is consumed**
-```sql
-SELECT name, state, error_message
-FROM TABLE(INFORMATION_SCHEMA.TASK_HISTORY(
-    SCHEDULED_TIME_RANGE_START => DATEADD('minutes', -10, CURRENT_TIMESTAMP()),
-    TASK_NAME => 'PROCESS_CUSTOMER_CHANGES_TASK'
-));
--- state should be SUCCEEDED
-
-SELECT COUNT(*) FROM RAW_DATA.CUSTOMERS_STREAM;
--- Should be 0 after successful consumption
-```
-
-**Step 5: Investigate root cause** — Why did the warehouse auto-suspend during task execution? Add a Task failure alert (Snowflake Alerts or external monitoring) so the team is notified before the stream goes stale next time.
-
----
-
-**Q18 (System design) — Fully Snowflake-native CDC pipeline for retail SALES_RAW.**
-
-```sql
--- ── STREAM on the raw table ───────────────────────────────────────────────
-CREATE STREAM IF NOT EXISTS RAW_DATA.SALES_STREAM
-  ON TABLE RAW_DATA.SALES_RAW;
--- Standard stream (not append-only) because existing sales records can be updated
-
--- ── STAGING TABLE ─────────────────────────────────────────────────────────
-CREATE TABLE IF NOT EXISTS STAGING.STG_SALES (
-    sale_id       NUMBER       PRIMARY KEY,
-    customer_id   NUMBER,
-    product_id    NUMBER,
-    amount        NUMBER(12,2),
-    sale_date     DATE,
-    status        VARCHAR,
-    updated_at    TIMESTAMP_NTZ DEFAULT CURRENT_TIMESTAMP()
+-- Step 4: Re-insert ONLY the missing rows
+-- Using NOT EXISTS prevents double-inserting rows that survived the bad delete
+INSERT INTO ECOMM_DB.RAW_DATA.ORDERS_RAW
+    (order_id, customer_id, customer_name, product, quantity,
+     unit_price, total_amount, status, order_date, updated_at)
+SELECT order_id, customer_id, customer_name, product, quantity,
+       unit_price, total_amount, status, order_date, updated_at
+FROM ECOMM_DB.RAW_DATA.ORDERS_RAW_RECOVERED r
+WHERE NOT EXISTS (
+    SELECT 1 FROM ECOMM_DB.RAW_DATA.ORDERS_RAW s
+    WHERE s.order_id = r.order_id
 );
 
--- ── MART TABLE ────────────────────────────────────────────────────────────
-CREATE TABLE IF NOT EXISTS MARTS.SALES_MART (
-    sale_date     DATE,
-    total_sales   NUMBER,
-    total_revenue NUMBER(14,2)
-);
+-- Step 5: Verify count is restored
+SELECT COUNT(*) FROM ECOMM_DB.RAW_DATA.ORDERS_RAW;
 
--- ── ROOT TASK: sync stream changes into staging ───────────────────────────
-CREATE TASK IF NOT EXISTS PIPELINE.SYNC_SALES_TASK
-  WAREHOUSE = COMPUTE_WH
-  SCHEDULE  = '5 MINUTE'
-  WHEN SYSTEM$STREAM_HAS_DATA('RAW_DATA.SALES_STREAM')
-AS
-MERGE INTO STAGING.STG_SALES AS target
-USING (
-  SELECT * FROM RAW_DATA.SALES_STREAM
-  WHERE METADATA$ACTION = 'INSERT'
-) AS src
-ON target.sale_id = src.sale_id
-WHEN MATCHED THEN
-  UPDATE SET
-    target.amount     = src.amount,
-    target.status     = src.status,
-    target.updated_at = CURRENT_TIMESTAMP()
-WHEN NOT MATCHED THEN
-  INSERT (sale_id, customer_id, product_id, amount, sale_date, status, updated_at)
-  VALUES (src.sale_id, src.customer_id, src.product_id, src.amount, src.sale_date, src.status, CURRENT_TIMESTAMP());
+-- Step 6: The re-inserted rows now appear in the stream as INSERT records
+-- Run the Day 4 task to propagate them to STAGING and MART
+EXECUTE TASK ECOMM_DB.RAW_DATA.RAW_TO_STG_TASK;
 
--- ── CHILD TASK: refresh mart after staging sync ───────────────────────────
-CREATE TASK IF NOT EXISTS PIPELINE.REFRESH_SALES_MART_TASK
-  WAREHOUSE = COMPUTE_WH
-  AFTER PIPELINE.SYNC_SALES_TASK
-AS
-INSERT INTO MARTS.SALES_MART (sale_date, total_sales, total_revenue)
-SELECT sale_date, COUNT(*), SUM(amount)
-FROM STAGING.STG_SALES
-GROUP BY sale_date;
+SELECT COUNT(*) FROM ECOMM_DB.STAGING.STG_ORDERS;
+SELECT * FROM ECOMM_DB.MARTS.ORDERS_MART ORDER BY order_date;
 
--- ── RESUME: children first, root last ─────────────────────────────────────
-ALTER TASK PIPELINE.REFRESH_SALES_MART_TASK RESUME;
-ALTER TASK PIPELINE.SYNC_SALES_TASK RESUME;
+-- Step 7: Drop the recovery table
+DROP TABLE ECOMM_DB.RAW_DATA.ORDERS_RAW_RECOVERED;
 ```
 
-**Design decisions:**
-- Standard stream (not append-only) because sales records can be updated (e.g., status changes from PENDING to DELIVERED)
-- `WHEN SYSTEM$STREAM_HAS_DATA(...)` on the root task — no warehouse startup if no changes arrived
-- Child task has no `WHEN` condition — it always runs after the root succeeds (the mart refresh is fast regardless)
-- Root fires every 5 minutes — frequent enough to stay well within the 1-day stream retention window
+**Why stream and tasks are unaffected:** Cloning creates a new table object — it does not touch the stream's offset or the tasks' state. The stream keeps tracking `ORDERS_RAW` from where it left off. The re-inserted rows appear as new INSERT records in the stream, which is correct — the tasks will push them through to staging and mart normally.

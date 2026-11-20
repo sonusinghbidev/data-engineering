@@ -1,48 +1,36 @@
-# Day 3 — Interview Questions: Streams and Tasks
+# Day 5 — Interview Questions: Stages, COPY INTO, Snowpipe, and Zero-Copy Cloning
 
-> 18 questions across both concepts. Attempt your own answer first, then check the solutions file.
-> Difficulty tags: (Warm-up) → (Conceptual) → (Scenario) → (Tricky) → (Deep dive) → (System design)
-
----
-
-## Concept 1: Streams — Change Data Capture
-
-**Q1 (Warm-up)** — What is a Snowflake Stream? What problem does it solve compared to doing a full table reload every pipeline run?
-
-**Q2 (Warm-up)** — What are the three metadata columns every Stream adds to its rows? What are the possible values for `METADATA$ACTION`?
-
-**Q3 (Conceptual)** — How does a Snowflake Stream represent an UPDATE? How many rows appear in the stream for a single UPDATE, and what are their `METADATA$ACTION` and `METADATA$ISUPDATE` values?
-
-**Q4 (Conceptual)** — What is the difference between a standard stream and an `APPEND ONLY` stream? Give a real-world example of when you would use each.
-
-**Q5 (Tricky)** — You query a stream with `SELECT *` and see 200 change records. Does the stream offset advance? What action actually clears the stream?
-
-**Q6 (Scenario)** — You have a `CUSTOMERS_RAW` table that receives inserts and updates throughout the day. Write the MERGE statement that uses a stream on this table to keep `STG_CUSTOMERS` in sync — handling both new inserts and updates.
-
-**Q7 (Tricky)** — A stream on a table shows an UPDATE as two rows — a DELETE and an INSERT. In your MERGE, you filter to `METADATA$ACTION = 'INSERT'` only. Does this correctly handle updates? Why or why not?
-
-**Q8 (Deep dive)** — What does it mean for a stream to become "stale"? What causes it, and what do you have to do to recover?
-
-**Q9 (Scenario)** — You have an `ORDERS_RAW` table where rows are only ever inserted — never updated or deleted. What type of stream should you create and why?
+> 15 questions. Difficulty tags: (Warm-up) → (Conceptual) → (Scenario) → (Tricky)
+> All scenarios use the Day 4 tables: ORDERS_RAW, STG_ORDERS, ORDERS_MART.
 
 ---
 
-## Concept 2: Tasks — Scheduling and Automation
+**Q1 (Warm-up)** — What is a Stage in Snowflake? Why do files need to go through a stage before they can be loaded into a table?
 
-**Q10 (Warm-up)** — What is a Snowflake Task? What two scheduling approaches does it support?
+**Q2 (Warm-up)** — What is the difference between an internal stage and an external stage? Which one requires cloud credentials?
 
-**Q11 (Warm-up)** — Tasks are created in SUSPENDED state by default. What command do you run to activate a task? What command pauses it without dropping it?
+**Q3 (Conceptual)** — Snowflake internal stages have three sub-types: user, table, and named. What is the difference? Which should you use for a shared production pipeline and why?
 
-**Q12 (Conceptual)** — What does `WHEN SYSTEM$STREAM_HAS_DATA('schema.stream_name')` do in a Task definition? Why does this matter for cost?
+**Q4 (Warm-up)** — What does `COPY INTO` do? What compute resource runs it and how is it billed?
 
-**Q13 (Scenario)** — Write a Task that checks for new customer changes every 5 minutes and runs a MERGE to sync a staging table. Include the WHEN condition so the warehouse only starts when there is actual data.
+**Q5 (Conceptual)** — You run `COPY INTO ORDERS_RAW` on a stage that already has two previously loaded files and one new file. What happens to each file? Why?
 
-**Q14 (Tricky)** — What is `EXECUTE TASK`? How is it different from waiting for the scheduled run? Give two situations where you would use it in production.
+**Q6 (Tricky)** — A developer uses `FORCE = TRUE` in a `COPY INTO` command targeting `ORDERS_RAW`. What is the risk? What problem does this create for the Day 4 stream?
 
-**Q15 (Conceptual)** — Explain Task chaining. What is the difference between a root task and a child task? Can a child task have its own schedule?
+**Q7 (Scenario)** — Your CSV has 9 columns matching ORDERS_RAW exactly, but you want to skip the `updated_at` column and let it use its `DEFAULT CURRENT_TIMESTAMP()`. How do you write the COPY INTO?
 
-**Q16 (Scenario)** — You have three tasks: `LOAD_TASK` → `TRANSFORM_TASK` → `MART_TASK`. In what order do you resume them and why?
+**Q8 (Warm-up)** — What is Snowpipe? How is it different from a 1-minute scheduled Task that runs COPY INTO?
 
-**Q17 (Deep dive)** — Your Task fails because the warehouse was auto-suspended. The stream has been accumulating changes for 18 hours. Walk through the steps you take to recover without losing data.
+**Q9 (Conceptual)** — Snowpipe is "serverless." What does that mean for compute and billing? When would a Task + COPY INTO actually be better than Snowpipe?
 
-**Q18 (System design)** — Design a fully Snowflake-native CDC pipeline for a retail company. The `SALES_RAW` table receives new and updated rows throughout the day. You need to: keep `STG_SALES` in sync using a stream and MERGE, then refresh `SALES_MART` after each sync. Use chained tasks with a schedule and WHEN condition. Describe the full setup.
+**Q10 (Tricky)** — You call `ALTER PIPE ORDERS_RAW_PIPE REFRESH` twice in a row. The same files are in the stage. Does Snowpipe load the files twice? Why or why not?
+
+**Q11 (Scenario)** — Your Snowpipe has been PAUSED for 2 hours. During that time, 15 new CSV files arrived in the stage. You resume the pipe. How do you make sure all 15 files get loaded?
+
+**Q12 (Warm-up)** — What is zero-copy cloning? What does "zero-copy" mean technically, and when does storage actually get consumed?
+
+**Q13 (Conceptual)** — You run `CREATE DATABASE ECOMM_DB_DEV CLONE ECOMM_DB`. A developer then truncates `ORDERS_RAW` in `ECOMM_DB_DEV`. What happens to `ECOMM_DB.RAW_DATA.ORDERS_RAW` in the original database?
+
+**Q14 (Tricky)** — You clone `ORDERS_RAW`. The original table has an active stream `ORDERS_RAW_STREAM`. What happens to the stream after cloning? What about the Day 4 tasks?
+
+**Q15 (Scenario)** — At 3 AM, a bad ETL job ran `DELETE FROM ECOMM_DB.RAW_DATA.ORDERS_RAW WHERE order_date < '2024-01-12'` and wiped 6 rows. The table has a 1-day Time Travel window. Write the exact SQL to identify the bad query and restore the deleted rows without affecting the stream or tasks.
